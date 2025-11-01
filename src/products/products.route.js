@@ -24,37 +24,39 @@ router.post("/uploadImages", async (req, res) => {
 });
 
 // إنشاء منتج
+// مثال داخل products.route.js (أو الملف الذي يحوي الراوت)
 router.post("/create-product", async (req, res) => {
   try {
     const {
       name,
+      size,          // اختياري
       category,
       description,
       oldPrice,
       price,
       image,
       author,
-      size,
       inStock
     } = req.body;
 
     if (!name || !category || !description || !price || !image || !author) {
       return res.status(400).send({ message: "جميع الحقول المطلوبة يجب إرسالها" });
     }
-    if (category === "حناء بودر" && !size) {
-      return res.status(400).send({ message: "يجب تحديد حجم الحناء" });
-    }
+
+    // تكوين الاسم النهائي: إذا وُجد حجم → "الاسم (الحجم)"
+    const finalName = size && String(size).trim()
+      ? `${name} (${String(size).trim()})`
+      : name;
 
     const productData = {
-      name,
+      name: finalName,
+      size: size || null,              // نخزن الحجم أيضاً بشكل مستقل
       category,
       description,
       price,
       oldPrice,
       image,
       author,
-      size: size || null,
-      // إن لم تُرسل القيمة يأتي افتراضياً من الـ Schema = true
       inStock: typeof inStock === 'boolean' ? inStock : true
     };
 
@@ -67,6 +69,7 @@ router.post("/create-product", async (req, res) => {
     res.status(500).send({ message: "Failed to create new product" });
   }
 });
+
 
 
 // جميع المنتجات
@@ -143,7 +146,7 @@ router.patch(
   "/update-product/:id",
   verifyToken,
   verifyAdmin,
-  upload.array("image"), // استقبال عدة صور جديدة (Files)
+  upload.array("image"),
   async (req, res) => {
     try {
       const productId = req.params.id;
@@ -153,16 +156,29 @@ router.patch(
         return res.status(404).send({ message: "المنتج غير موجود" });
       }
 
+      // تنظيف الاسم من أي حجم قديم في آخره: "اسم (شيء)"
+      const rawName = typeof req.body.name === 'string' ? req.body.name : '';
+      const baseName = rawName.replace(/\s*\([^)]*\)\s*$/g, '').trim();
+
+      const size = typeof req.body.size === 'string' ? req.body.size.trim() : '';
+      const finalName = size ? `${baseName} (${size})` : baseName;
+
+      // inStock قد تأتي كـ "true"/"false" أو Boolean
+      const inStockRaw = req.body.inStock;
+      const inStock =
+        typeof inStockRaw === 'boolean'
+          ? inStockRaw
+          : String(inStockRaw).toLowerCase() === 'true';
+
       const updateData = {
-        name: req.body.name,
+        name: finalName,
         category: req.body.category,
         price: req.body.price,
         oldPrice: req.body.oldPrice || null,
         description: req.body.description,
-        size: req.body.size || null,
+        size: size || null,
         author: req.body.author,
-        inStock: req.body.inStock === 'true',
-
+        inStock,
       };
 
       if (!updateData.name || !updateData.category || !updateData.price || !updateData.description) {
@@ -183,7 +199,7 @@ router.patch(
         }
       }
 
-      // رفع الصور الجديدة (إن وُجدت) من الـ buffer إلى Cloudinary
+      // رفع الصور الجديدة (إن وُجدت)
       let newImageUrls = [];
       if (Array.isArray(req.files) && req.files.length > 0) {
         newImageUrls = await Promise.all(
@@ -191,12 +207,10 @@ router.patch(
         );
       }
 
-      // إن كان هناك تعديل للصور، دمّج المُبقاة + الجديدة
       if (keepImages.length > 0 || newImageUrls.length > 0) {
         updateData.image = [...keepImages, ...newImageUrls];
       } else {
-        // لا نلمس الصور إن لم تصل keepImages ولم ترفع صور جديدة
-        delete updateData.image;
+        delete updateData.image; // لا نلمس الصور إن لم تُرسل
       }
 
       const updatedProduct = await Products.findByIdAndUpdate(
